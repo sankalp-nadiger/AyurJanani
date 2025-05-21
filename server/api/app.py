@@ -63,6 +63,10 @@ with open(model_path, "rb") as model_file:
 with open(scaler_path, "rb") as scaler_file:
     scaler = joblib.load(scaler_file)
 
+@app.route("/health")
+def health_check():
+    return "OK", 200
+    
 @app.route("/create_doctor_profile", methods=["POST"])
 def create_doctor_profile():
     '''Simple endpoint for us to dump some data into a table'''
