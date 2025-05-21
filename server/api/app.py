@@ -50,8 +50,8 @@ def chat(model, messages):
         raise
 
 # Load trained models and scalers
-# maternal_model = joblib.load("finalized_maternal_model.sav")
-# maternal_scaler = joblib.load("scaleX.pkl")
+maternal_model = joblib.load("finalized_maternal_model.sav")
+maternal_scaler = joblib.load("scaleX.pkl")
 
 # Load the trained model and scaler
 model_path = "fetal_health_model.sav"
