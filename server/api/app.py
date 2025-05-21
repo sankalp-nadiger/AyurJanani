@@ -3,9 +3,9 @@ import joblib
 import numpy as np
 import pandas as pd
 import os
+import requests
 from dotenv import load_dotenv
 load_dotenv()
-from ollama import chat
 from flask_cors import CORS
 
 from supabase import create_client, Client
@@ -16,17 +16,42 @@ CORS(app)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 OLLAMA_MODEL_ID = os.environ.get("OLLAMA_MODEL_ID")
-
+OLLAMA_API_HOST = os.environ.get("OLLAMA_API_HOST", "http://localhost:11434")
 
 if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY environment variables")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Custom chat function to replace ollama-python client
+def chat(model, messages):
+    """
+    Send a chat request to Ollama API using the requests library
+    """
+    try:
+        response = requests.post(
+            f"{OLLAMA_API_HOST}/api/chat",
+            json={"model": model, "messages": messages}
+        )
+        
+        result = response.json()
+        # Format response to match original ollama-python structure
+        class DotDict(dict):
+            """Dot notation access to dictionary attributes"""
+            __getattr__ = dict.get
+            __setattr__ = dict.__setitem__
+            __delattr__ = dict.__delitem__
+            
+        result_obj = DotDict(result)
+        result_obj.message = DotDict(result.get("message", {}))
+        return result_obj
+    except Exception as e:
+        print(f"Error in chat function: {str(e)}")
+        raise
 
 # Load trained models and scalers
-maternal_model = joblib.load("finalized_maternal_model.sav")
-maternal_scaler = joblib.load("scaleX.pkl")
+# maternal_model = joblib.load("finalized_maternal_model.sav")
+# maternal_scaler = joblib.load("scaleX.pkl")
 
 # Load the trained model and scaler
 model_path = "fetal_health_model.sav"
@@ -37,48 +62,7 @@ with open(model_path, "rb") as model_file:
 
 with open(scaler_path, "rb") as scaler_file:
     scaler = joblib.load(scaler_file)
-    # print("Scaler expects feature count:", scaler.n_features_in_)
 
-
-
-# @app.route("/create_profile",methods=["POST"])
-# def create_profile():
-#     try:
-#         auth_header = request.headers.get('Authorization')
-#         if not auth_header or not auth_header.startswith('Bearer '):
-#             return {'error': 'No valid token provided'}, 401
-        
-#         token = auth_header.split(' ')[1]
-
-#         user_data = supabase.auth.get_user(token)
-#         if not user_data:
-#             return {'error': 'Invalid token'}, 401
-
-#         # print(user_data)
-#         # return jsonify({"message": "Profile created successfully"}), 200
-    
-#         data = request.json
-#         print("recieved data", data)
-#         # Extract data from request
-#         user_id = user_data.user.id
-#         profile_data = {
-#             'profile_image': data.get('profile_image'),
-#             'pregnancy_trimester': data.get('pregnancy_trimester'),
-#             'current_weight': data.get('current_weight'),
-#             'current_height': data.get('current_height'),
-#             'age': data.get('age'),
-#             'user_name': data.get('user_name'),
-#             "expected_due_date" : data.get('expected_due_date'),
-#             'id': user_id
-#         }
-
-#         # Insert into profiles table
-#         result = supabase.table('profiles').upsert(profile_data).execute()
-        
-#         return jsonify({"message": "Profile created successfully", "data": result.data}), 200
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-    
 @app.route("/create_doctor_profile", methods=["POST"])
 def create_doctor_profile():
     '''Simple endpoint for us to dump some data into a table'''
@@ -144,67 +128,6 @@ def predict_maternal():
         return jsonify({"prediction": risk_level})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-    
-
-# @app.route("/get_vitals", methods=["GET"])
-# def get_vitals():
-#     try:
-#         auth_header = request.headers.get('Authorization')
-#         if not auth_header or not auth_header.startswith('Bearer '):
-#             return {'error': 'No valid token provided'}, 401
-        
-#         token = auth_header.split(' ')[1]
-
-#         user_data = supabase.auth.get_user(token)
-
-#         if not user_data:
-#             return {'error': 'Invalid token'}, 401
-
-#         result = supabase.table('vitals').select().eq('UID', user_data.user.id).order('created_at', desc=True).execute()
-#         return jsonify(result.data)
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-    
-# @app.route("/get_contractions_data", methods=["GET"])
-# def get_contractions_data():
-#     '''Not tested'''
-#     try:
-#         auth_header = request.headers.get('Authorization')
-#         if not auth_header or not auth_header.startswith('Bearer '):
-#             return {'error': 'No valid token provided'}, 401
-        
-#         token = auth_header.split(' ')[1]
-
-#         user_data = supabase.auth.get_user(token)
-
-#         if not user_data:
-#             return {'error': 'Invalid token'}, 401
-
-#         result = supabase.table('contractions').select().eq('UID', user_data.user.id).order('created_at', desc=True).execute()
-#         return jsonify(result.data)
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
-# @app.route("/get_ctg_data", methods=["GET"])
-# def get_ctg_data():
-#     '''Not tested'''
-#     try:
-#         auth_header = request.headers.get('Authorization')
-#         if not auth_header or not auth_header.startswith('Bearer '):
-#             return {'error': 'No valid token provided'}, 401
-        
-#         token = auth_header.split(' ')[1]
-
-#         user_data = supabase.auth.get_user(token)
-
-#         if not user_data:
-#             return {'error': 'Invalid token'}, 401
-
-#         result = supabase.table('fetal_health').select().eq('UID', user_data.user.id).order('created_at', desc=True).execute()
-#         return jsonify(result.data)
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
 
 @app.route("/predict_fetal", methods=["POST"])
 def predict_fetal():
@@ -283,8 +206,6 @@ def predict_fetal():
     except Exception as e:
         return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
 
-
-
 @app.route("/diet_plan", methods=["POST"])
 def pregnancy_diet():
     try:
@@ -298,11 +219,9 @@ def pregnancy_diet():
 
         user_data = supabase.auth.get_user(token)
 
-
         if not user_data:
             return {'error': 'Invalid token'}, 401
         
-
         prompt = f"You are a professional dietician and nutritionist. You suggest excellent diet plans for pregnant women that look after their well being and growth. You will now suggest a diet plan for a {data['trimester']} trimester pregnant woman weighing about {data['weight']} kg, who is feeling {data['health_conditions']} and has strict dietary preferences as follows: {data['dietary_preference']}. Do not suggest any foods that can cause harm or go against the dietary preferences. Suggest both a vegetarian only and a non-vegetarian diet plan separately for her and just give the plan."
 
         response = chat(model=OLLAMA_MODEL_ID, messages=[
@@ -312,10 +231,6 @@ def pregnancy_diet():
         # Store the diet plan in the database
         diet_data = {
             'UID': user_data.user.id,
-            # 'trimester': data['trimester'],
-            # 'weight': data['weight'],
-            # 'health_conditions': data['health_conditions'],
-            # 'dietary_preference': data['dietary_preference'],
             'diet_plan': response.message.content # Stored as markdown
         }
 
@@ -368,10 +283,8 @@ def chatbot():
 
         prompt = data['message']
         chat_history.append({'role':'user','content':prompt})
-        response = chat(model=OLLAMA_MODEL_ID, messages=chat_history)
-
-        print("Updated chat history:", chat_history)
-
+        
+        # Get response from Ollama
         response = chat(model=OLLAMA_MODEL_ID, messages=chat_history)
 
         # Update the chat history
