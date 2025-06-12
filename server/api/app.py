@@ -7,6 +7,9 @@ import requests
 from dotenv import load_dotenv
 load_dotenv()
 from flask_cors import CORS
+from datetime import datetime
+from typing import Dict, List, Optional, Union
+from sklearn.feature_extraction import DictVectorizer
 
 from supabase import create_client, Client
 
@@ -22,6 +25,48 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     raise ValueError("Missing SUPABASE_URL or SUPABASE_KEY environment variables")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Load ML Models
+MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
+
+def load_model_safely(model_path: str, error_msg: str) -> Optional[object]:
+    """Safely load a machine learning model with error handling."""
+    try:
+        if not os.path.exists(model_path):
+            print(f"Warning: Model file not found at {model_path}")
+            print(f"Impact: {error_msg}")
+            print(f"Solution: Ensure model file is placed at {model_path}")
+            return None
+        
+        model = joblib.load(model_path)
+        print(f"Successfully loaded model from {model_path}")
+        return model
+    except Exception as e:
+        print(f"Warning: Failed to load {model_path}: {str(e)}")
+        print(f"Impact: {error_msg}")
+        print(f"Solution: Check model file format and permissions")
+        return None
+
+# Load existing models from current location
+maternal_model = joblib.load("finalized_maternal_model.sav")
+maternal_scaler = joblib.load("scaleX.pkl")
+fetal_model = joblib.load("fetal_health_model.sav")
+fetal_scaler = joblib.load("scaleX1.pkl")
+
+# Load new Ayurvedic models from models directory
+symptom_classifier = load_model_safely(
+    os.path.join(MODEL_PATH, 'ayurvedic/symptom_classifier_model.pkl'),
+    'Symptom classification may be limited'
+)
+
+symptom_risk_model = load_model_safely(
+    os.path.join(MODEL_PATH, 'ayurvedic/symptom_risk_model.pkl'),
+    'Risk prediction may be limited'
+)
+
+remedy_model = load_model_safely(
+    os.path.join(MODEL_PATH, 'ayurvedic/remedy_model.pkl'),
+    'Remedy suggestions may be limited')
 
 # Custom chat function to replace ollama-python client
 def chat(model, messages):
@@ -49,24 +94,22 @@ def chat(model, messages):
         print(f"Error in chat function: {str(e)}")
         raise
 
-# Load trained models and scalers
-maternal_model = joblib.load("finalized_maternal_model.sav")
-maternal_scaler = joblib.load("scaleX.pkl")
-
-# Load the trained model and scaler
-model_path = "fetal_health_model.sav"
-scaler_path = "scaleX1.pkl"
-
-with open(model_path, "rb") as model_file:
-    model = joblib.load(model_file)
-
-with open(scaler_path, "rb") as scaler_file:
-    scaler = joblib.load(scaler_file)
-
-@app.route("/health")
-def health_check():
-    return "OK", 200
+# Utility function for token validation
+def validate_token(request) -> tuple[Optional[Dict], Optional[str]]:
+    """Validate the authorization token and return user data or error."""
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None, 'No valid token provided'
     
+    token = auth_header.split(' ')[1]
+    try:
+        user_data = supabase.auth.get_user(token)
+        if not user_data or not user_data.user:
+            return None, 'Invalid token'
+        return user_data, None
+    except Exception:
+        return None, 'Failed to validate token'
+
 @app.route("/create_doctor_profile", methods=["POST"])
 def create_doctor_profile():
     '''Simple endpoint for us to dump some data into a table'''
@@ -299,12 +342,310 @@ def chatbot():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
-@app.route('/')
-def ind():
-    return "Hello governer"
+@app.route("/classify_symptoms", methods=["POST"])
+def classify_symptoms():
+    """Classify reported symptoms into standardized categories."""
+    try:
+        user_data, error = validate_token(request)
+        if error:
+            return jsonify({'error': error}), 401
 
-import os
+        data = request.get_json()
+        if not data or "symptoms" not in data:
+            return jsonify({'error': 'Missing symptoms data'}), 400
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(debug=False, port=port, host="0.0.0.0")
+        symptoms = data["symptoms"]
+        if not isinstance(symptoms, (str, list)):
+            return jsonify({'error': 'Symptoms must be text or list'}), 400
+
+        if symptom_classifier is None:
+            return jsonify({'error': 'Symptom classification service unavailable'}), 500
+
+        # Convert list to text if needed
+        symptom_text = " ".join(symptoms) if isinstance(symptoms, list) else symptoms
+        
+        # Perform classification
+        try:
+            classified_symptoms = symptom_classifier.predict([symptom_text])[0]
+            confidence_scores = symptom_classifier.predict_proba([symptom_text])[0]
+            
+            # Format results
+            classification_result = {
+                'categories': classified_symptoms,
+                'confidence': float(max(confidence_scores))
+            }
+            
+            # Store in Supabase
+            symptom_data = {
+                'UID': user_data.user.id,
+                'reported_symptoms': symptom_text,
+                'classified_categories': classified_symptoms,
+                'confidence': float(max(confidence_scores)),
+                'recorded_at': datetime.utcnow().isoformat()
+            }
+            
+            supabase.table('symptoms').insert(symptom_data).execute()
+            
+            return jsonify(classification_result)
+        except Exception as e:
+            return jsonify({'error': f'Classification failed: {str(e)}'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@app.route("/map_symptom_risk", methods=["POST"])
+def map_symptom_risk():
+    """Map symptoms to potential pregnancy risks using symptoms, vitals, and diagnosis."""
+    try:
+        user_data, error = validate_token(request)
+        if error:
+            return jsonify({'error': error}), 401
+
+        uid = user_data.user.id
+        data = request.get_json()
+
+        if not data or "symptom_categories" not in data:
+            return jsonify({'error': 'Missing symptom categories'}), 400
+
+        if symptom_risk_model is None:
+            return jsonify({'error': 'Risk mapping service unavailable'}), 500
+
+        symptom_categories = data["symptom_categories"]
+
+        # 1. 🔄 Get historical symptoms
+        historical_data = supabase.table('symptoms')\
+            .select('classified_categories')\
+            .eq('UID', uid)\
+            .order('recorded_at', desc=True)\
+            .limit(5)\
+            .execute()
+
+        all_symptoms = symptom_categories.copy()
+        for record in historical_data.data:
+            all_symptoms.extend(record['classified_categories'])
+        all_symptoms = list(dict.fromkeys(all_symptoms))
+
+        # 2. 📊 Get latest vitals from Supabase
+        vitals_data = supabase.table("vitals")\
+            .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
+            .eq("UID", uid)\
+            .order("inserted_at", desc=True)\
+            .limit(1)\
+            .execute().data
+
+        vitals = vitals_data[0] if vitals_data else {}
+
+        # 3. 🔍 Get diagnoses/test reports from Node backend
+        try:
+            node_response = requests.get(
+                f"http://your-node-api.com/api/reports/diagnosis?uid={uid}"
+            )
+            diagnosis_data = node_response.json().get("recent_diagnoses", [])
+        except Exception as e:
+            diagnosis_data = []
+            print(f"Warning: Could not fetch diagnosis from Node: {e}")
+
+        # 4. 🔄 Prepare unified feature vector (you may need to preprocess or vectorize)
+        combined_features = {
+            "symptoms": all_symptoms,
+            "systolic_bp": vitals.get("systolic_bp", 120),
+            "diastolic_bp": vitals.get("diastolic_bp", 80),
+            "blood_glucose": vitals.get("blood_glucose", 90),
+            "body_temp": vitals.get("body_temp", 36.8),
+            "heart_rate": vitals.get("heart_rate", 78),
+            "diagnoses": diagnosis_data
+        }
+
+        # 🔁 You must encode this dict to match what your ML model expects
+        # Either convert to vector beforehand or use preprocessor like Tfidf, DictVectorizer, etc.
+
+        try:
+            X_input = encode_features_for_model(combined_features)  # ✨ You define this function
+            risks = symptom_risk_model.predict([X_input])[0]
+            probs = symptom_risk_model.predict_proba([X_input])[0]
+        except Exception as e:
+            return jsonify({'error': f'Model prediction failed: {str(e)}'}), 500
+
+        # 5. 🎯 Format predictions
+        risks_result = [
+            {
+                'risk_type': risk,
+                'probability': float(prob),
+                'severity': 'high' if prob > 0.7 else 'medium' if prob > 0.4 else 'low'
+            }
+            for risk, prob in zip(risks, probs)
+        ]
+
+        # 6. 💾 Save to Supabase
+        risk_data = {
+            'UID': uid,
+            'symptoms': all_symptoms,
+            'vitals_used': vitals,
+            'diagnoses': diagnosis_data,
+            'risk_predictions': risks_result,
+            'recorded_at': datetime.utcnow().isoformat()
+        }
+
+        supabase.table('risk_predictions').insert(risk_data).execute()
+        return jsonify({'risks': risks_result})
+
+    except Exception as e:
+        return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+
+@app.route("/generate_recommendations", methods=["GET"])
+def generate_recommendations():
+    try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "No valid token provided"}), 401
+        token = auth_header.split(" ")[1]
+        user_data = supabase.auth.get_user(token)
+
+        if not user_data:
+            return jsonify({"error": "Invalid token"}), 401
+
+        uid = user_data.user.id
+
+        # Pull lifestyle params from Supabase
+        profile = supabase.table("user_profiles").select("*").eq("UID", uid).execute().data[0]
+        prakriti = profile.get("prakriti", "vata")
+        trimester = profile.get("trimester", "2")
+        symptoms = supabase.table("symptoms").select("classified_categories").eq("UID", uid).order("recorded_at", desc=True).limit(3).execute().data
+        recent_symptoms = [s["classified_categories"] for s in symptoms]
+
+        # Pull behavior data from Node backend
+        try:
+            behavior_data = requests.get(
+                f"http://your-node-backend.com/api/behavior?uid={uid}"
+            ).json()
+        except Exception:
+            behavior_data = {}
+
+        prompt = (
+            f"You are a prenatal wellness expert. Create lifestyle suggestions including: "
+            f"1. A short daily self-care activity\n"
+            f"2. A suitable music type or genre\n"
+            f"3. Personalized physical activity\n"
+            f"4. Ayurvedic lifestyle suggestion\n"
+            f"User profile: {prakriti} prakriti, trimester {trimester}. "
+            f"Recent symptoms: {recent_symptoms}. Feedback trend: {behavior_data}."
+        )
+
+        response = chat(model=OLLAMA_MODEL_ID, messages=[{"role": "user", "content": prompt}])
+
+        # Optionally split response and store by type
+        result = {
+            "exercise": extract_section(response.message.content, "Exercise"),
+            "music": extract_section(response.message.content, "Music"),
+            "self_care": extract_section(response.message.content, "Self-care"),
+            "ayurveda_tip": extract_section(response.message.content, "Ayurveda")
+        }
+
+        supabase.table("recommendations").upsert({
+            "UID": uid,
+            "content": result,
+            "created_at": datetime.utcnow().isoformat()
+        }).execute()
+
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+def extract_section(text, section_name):
+    for line in text.splitlines():
+        if section_name.lower() in line.lower():
+            return line.split(":", 1)[-1].strip()
+    return "Not found"
+    
+@app.route("/remedy_recommendation", methods=["POST"])
+def remedy_recommendation():
+    """Generate Ayurvedic remedy recommendations using AI based on symptoms, prakriti, and diagnosis context."""
+    try:
+        user_data, error = validate_token(request)
+        if error:
+            return jsonify({'error': error}), 401
+
+        uid = user_data.user.id
+        data = request.get_json()
+        if not data or "symptoms" not in data or "prakriti" not in data:
+            return jsonify({'error': 'Missing symptoms or prakriti data'}), 400
+
+        symptoms = data["symptoms"]
+        prakriti = data["prakriti"]
+
+        # 🔍 Step 1: Fetch diagnosis from Node API
+        try:
+            diagnosis_response = requests.get(
+                f"http://your-node-api.com/api/reports/diagnosis?uid={uid}"
+            )
+            diagnosis_data = diagnosis_response.json().get("recent_diagnoses", [])
+        except Exception as e:
+            diagnosis_data = []
+            print(f"[WARN] Could not fetch diagnosis from Node: {e}")
+
+        # 🩺 Step 2: Get vitals from Supabase (optional, adds more context)
+        try:
+            vitals_data = supabase.table("vitals")\
+                .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
+                .eq("UID", uid)\
+                .order("inserted_at", desc=True)\
+                .limit(1)\
+                .execute().data
+            vitals = vitals_data[0] if vitals_data else {}
+        except Exception as e:
+            vitals = {}
+            print(f"[WARN] Could not fetch vitals: {e}")
+
+        # 🧠 Step 3: Generate AI Prompt
+        prompt = (
+            f"You are an expert Ayurvedic practitioner. Suggest safe and personalized remedies "
+            f"for a pregnant woman with the following details:\n"
+            f"- Prakriti: {prakriti}\n"
+            f"- Reported symptoms: {', '.join(symptoms)}\n"
+            f"- Known diagnoses: {', '.join(diagnosis_data) if diagnosis_data else 'None'}\n"
+            f"- Recent vitals: BP: {vitals.get('systolic_bp', 'N/A')}/{vitals.get('diastolic_bp', 'N/A')}, "
+            f"Glucose: {vitals.get('blood_glucose', 'N/A')}, HR: {vitals.get('heart_rate', 'N/A')}\n"
+            f"Suggest 2–3 Ayurvedic remedies only from safe ingredients (no toxic herbs). "
+            f"Mention how to use them (e.g., morning/evening, with food, etc.). Avoid overlapping with existing prescriptions."
+        )
+
+        response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
+
+        # 📄 Step 4: Format & Store
+        remedy_text = response.message.content.strip()
+        remedy_list = [{"remedy": line.strip(), "confidence": 1.0}
+                       for line in remedy_text.split("\n") if line.strip()]
+
+        remedy_data = {
+            'UID': uid,
+            'symptoms': symptoms,
+            'prakriti': prakriti,
+            'diagnoses': diagnosis_data,
+            'recommended_remedies': remedy_list,
+            'raw_prompt': prompt,
+            'recorded_at': datetime.utcnow().isoformat()
+        }
+
+        supabase.table('remedy_recommendations').insert(remedy_data).execute()
+
+        return jsonify({"remedies": remedy_list})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+def encode_features_for_model(features: dict):
+    # Merge all categorical & numeric features
+    merged_dict = {
+        "systolic_bp": features["systolic_bp"],
+        "diastolic_bp": features["diastolic_bp"],
+        "blood_glucose": features["blood_glucose"],
+        "body_temp": features["body_temp"],
+        "heart_rate": features["heart_rate"]
+    }
+    # Add multi-hot encoded symptoms
+    for symptom in features["symptoms"]:
+        merged_dict[f"symptom__{symptom}"] = 1
+    # Add diagnosis keywords
+    for diag in features["diagnoses"]:
+        merged_dict[f"diagnosis__{diag.lower().replace(' ', '_')}"] = 1
+    return vectorizer.transform(merged_dict)  # vectorizer = DictVectorizer or similar
