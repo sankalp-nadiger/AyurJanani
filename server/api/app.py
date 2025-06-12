@@ -20,7 +20,7 @@ CORS(app)
 api = Api(
     app,
     version='1.0',
-    title='Prenova Prenatal Care API',
+    title='AyurJanani Prenatal Care API',
     description='''Comprehensive API for prenatal health monitoring and personalized care recommendations.
     
 Features:
@@ -674,7 +674,7 @@ class ChatBot(Resource):
                 .execute()
 
             if not chat_data.data:
-                chat_history = [{'role':'system','content':"You are prenova, an AI assistant that is here to help you with the user's pregnancy journey. You will only provide information that is accurate and helpful to the user. You will not provide any medical advice or diagnosis. You will not provide any information that is not related to pregnancy. You will be polite and respectful to the user at all times."}]
+                chat_history = [{'role':'system','content':"You are AyurJanani, an AI assistant that is here to help you with the user's pregnancy journey and clear any doubts in ayurveda. You will only provide information that is accurate and helpful to the user. You will not provide any medical advice or diagnosis. You will not provide any information that is not related to pregnancy or ayurveda. You will be polite and respectful to the user at all times."}]
             else:
                 chat_history = chat_data.data[0]['chat_history']
 
