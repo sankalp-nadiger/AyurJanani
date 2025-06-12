@@ -649,3 +649,11 @@ def encode_features_for_model(features: dict):
     for diag in features["diagnoses"]:
         merged_dict[f"diagnosis__{diag.lower().replace(' ', '_')}"] = 1
     return vectorizer.transform(merged_dict)  # vectorizer = DictVectorizer or similar
+
+@app.route('/')
+def ind():
+    return "Hello governer"
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=True, port=port, host="0.0.0.0")
