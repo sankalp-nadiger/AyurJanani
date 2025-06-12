@@ -7,7 +7,7 @@ charset-normalizer==3.4.1
 click==8.1.8
 Flask==3.1.0
 h11==0.14.0
-supabase>=2.15.3
+supabase==0.7.1
 httpcore>=0.15.0,<0.17.0
 httplib2==0.22.0
 httpx==0.23.3
