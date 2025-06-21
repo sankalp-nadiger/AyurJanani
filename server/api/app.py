@@ -430,8 +430,10 @@ def validate_token(request) -> tuple[Optional[Dict], Optional[str]]:
         return None, 'No valid token provided'
     
     token = auth_header.split(' ')[1]
+    print(f"Validating token: {token}")
     try:
         user_data = supabase.auth.get_user(token)
+        print(f"User data retrieved: {user_data}")
         if not user_data or not user_data.user:
             return None, 'Invalid token'
         return user_data, None
