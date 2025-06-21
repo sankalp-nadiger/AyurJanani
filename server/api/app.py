@@ -506,6 +506,7 @@ class FetalPrediction(Resource):
     def post(self):
         '''Predict fetal health status from CTG parameters'''
         try:
+            print("Authentication header: ",request.headers.get('Authorization'))
             user_data, error = validate_token(request)
             if error:
                 return {'error': error}, 401
