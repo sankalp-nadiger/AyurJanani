@@ -454,6 +454,7 @@ class MaternalPrediction(Resource):
     def post(self):
         '''Predict maternal health risks based on vital signs'''
         try:
+            print("Authentication header: ",request.headers.get('Authorization'))
             user_data, error = validate_token(request)
             if error:
                 return {'error': error}, 401
@@ -1074,4 +1075,4 @@ class Index(Resource):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(debug=True, port=port, host="0.0.0.0")
+    app.run(debug=False, port=port, host="0.0.0.0")
