@@ -12,6 +12,7 @@ from typing import Dict, List, Optional, Union
 from sklearn.feature_extraction import DictVectorizer
 from flask_restx import Api, Resource, fields, Namespace
 from supabase import create_client, Client
+import logging
 
 app = Flask(__name__)
 CORS(app)
@@ -452,6 +453,8 @@ class MaternalPrediction(Resource):
     @maternal_ns.response(400, 'Bad Request - Invalid input data', error_response)
     @maternal_ns.response(500, 'Server Error - Prediction service unavailable', error_response)
     def post(self):
+        print("[MaternalPrediction] Endpoint hit", flush=True)
+        logger.info("[MaternalPrediction] Endpoint hit")
         '''Predict maternal health risks based on vital signs'''
         try:
             print("Authentication header: ",request.headers.get('Authorization'))
@@ -504,9 +507,13 @@ class FetalPrediction(Resource):
     @fetal_ns.response(400, 'Bad Request - Invalid input data', error_response)
     @fetal_ns.response(500, 'Server Error - Prediction service unavailable', error_response)
     def post(self):
+        print("[FetalPrediction] Endpoint hit", flush=True)
+        logger.info("[FetalPrediction] Endpoint hit")
+        logger.info("Authentication header: ",request.headers.get('Authorization'))
         '''Predict fetal health status from CTG parameters'''
         try:
             print("Authentication header: ",request.headers.get('Authorization'))
+            logger.info("Entered try block for fetal prediction")
             user_data, error = validate_token(request)
             if error:
                 return {'error': error}, 401
@@ -583,6 +590,8 @@ class DietPlan(Resource):
     @diet_ns.response(401, 'Unauthorized - Invalid or missing token', error_response)
     @diet_ns.response(500, 'Server Error - Diet planning service unavailable', error_response)
     def post(self):
+        print("[DietPlan] Endpoint hit", flush=True)
+        logger.info("[DietPlan] Endpoint hit")
         '''Generate personalized diet plan based on trimester and preferences'''
         try:
             user_data, error = validate_token(request)
@@ -622,6 +631,8 @@ class ChatBot(Resource):
     @chat_ns.response(401, 'Unauthorized - Invalid or missing token', error_response)
     @chat_ns.response(500, 'Server Error - Chat history unavailable', error_response)
     def get(self):
+        print("[ChatBot GET] Endpoint hit", flush=True)
+        logger.info("[ChatBot GET] Endpoint hit")
         '''Get chat history for the current user'''
         try:
             user_data, error = validate_token(request)
@@ -656,6 +667,8 @@ class ChatBot(Resource):
     @chat_ns.response(400, 'Bad Request - Invalid message format', error_response)
     @chat_ns.response(500, 'Server Error - Chat service unavailable', error_response)
     def post(self):
+        print("[ChatBot POST] Endpoint hit", flush=True)
+        logger.info("[ChatBot POST] Endpoint hit")
         '''Send a message to the AI assistant'''
         try:
             user_data, error = validate_token(request)
@@ -714,6 +727,8 @@ class SymptomClassification(Resource):
     @ayurveda_ns.response(400, 'Bad Request - Invalid symptoms data', error_response)
     @ayurveda_ns.response(500, 'Server Error - Classification service unavailable', error_response)
     def post(self):
+        print("[SymptomClassification] Endpoint hit", flush=True)
+        logger.info("[SymptomClassification] Endpoint hit")
         '''Classify reported symptoms into standardized categories'''
         try:
             user_data, error = validate_token(request)
@@ -780,6 +795,8 @@ class SymptomRiskMapping(Resource):
     @ayurveda_ns.response(400, 'Bad Request - Invalid symptom categories', error_response)
     @ayurveda_ns.response(500, 'Server Error - Risk mapping service unavailable', error_response)
     def post(self):
+        print("[SymptomRiskMapping] Endpoint hit", flush=True)
+        logger.info("[SymptomRiskMapping] Endpoint hit")
         '''Map symptoms to potential pregnancy risks using symptoms, vitals, and diagnosis'''
         try:
             user_data, error = validate_token(request)
@@ -880,6 +897,8 @@ class GenerateRecommendations(Resource):
     @api.response(401, 'Unauthorized - Invalid or missing token', error_response)
     @api.response(500, 'Server Error - Recommendation service unavailable', error_response)
     def get(self):
+        print("[GenerateRecommendations] Endpoint hit", flush=True)
+        logger.info("[GenerateRecommendations] Endpoint hit")
         '''Generate personalized lifestyle recommendations'''
         try:
             user_data, error = validate_token(request)
@@ -965,6 +984,8 @@ class RemedyRecommendation(Resource):
     @ayurveda_ns.response(400, 'Bad Request - Missing required fields', error_response)
     @ayurveda_ns.response(500, 'Server Error - Recommendation service unavailable', error_response)
     def post(self):
+        print("[RemedyRecommendation] Endpoint hit", flush=True)
+        logger.info("[RemedyRecommendation] Endpoint hit")
         '''Get personalized Ayurvedic remedy recommendations'''
         try:
             user_data, error = validate_token(request)
