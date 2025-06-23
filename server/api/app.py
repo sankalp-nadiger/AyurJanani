@@ -13,6 +13,8 @@ from sklearn.feature_extraction import DictVectorizer
 from flask_restx import Api, Resource, fields, Namespace
 from supabase import create_client, Client
 import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
