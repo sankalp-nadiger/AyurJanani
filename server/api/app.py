@@ -511,7 +511,7 @@ class FetalPrediction(Resource):
     def post(self):
         print("[FetalPrediction] Endpoint hit", flush=True)
         logger.info("[FetalPrediction] Endpoint hit")
-        logger.info("Authentication header: ",request.headers.get('Authorization'))
+        logger.info(f"Authentication header: {request.headers.get('Authorization')}")
         '''Predict fetal health status from CTG parameters'''
         try:
             print("Authentication header: ",request.headers.get('Authorization'))
