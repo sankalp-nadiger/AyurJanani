@@ -549,7 +549,7 @@ class FetalPrediction(Resource):
             return {'error': f'Prediction failed: {e}'}, 500
 
         # 6) Map status
-        status_map = {1: 'Normal', 2: 'Suspect', 3: 'Pathological'}
+        status_map = {0: 'Normal', 1: 'Suspect', 2: 'Pathological'}
         status = status_map.get(pred, 'Unknown')
 
         # 7) Prepare CTG data
