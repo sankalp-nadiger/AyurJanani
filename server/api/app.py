@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import os
 import requests
+import jwt
 from dotenv import load_dotenv
 load_dotenv()
 from flask_cors import CORS
@@ -349,6 +350,7 @@ recommendation_response = api.model('RecommendationResponse', {
 # Environment variables and other configurations
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_JWT_SECRET = os.environ["SUPABASE_JWT_SECRET"]
 OLLAMA_MODEL_ID = os.environ.get("OLLAMA_MODEL_ID")
 OLLAMA_API_HOST = os.environ.get("OLLAMA_API_HOST", "http://localhost:11434")
 
@@ -426,23 +428,28 @@ def chat(model, messages):
         raise
 
 # Utility function for token validation
-def validate_token(request) -> tuple[Optional[Dict], Optional[str]]:
-    """Validate the authorization token and return user data or error."""
-    auth_header = request.headers.get('Authorization')
-    if not auth_header or not auth_header.startswith('Bearer '):
+def validate_token(request) -> tuple[Optional[dict], Optional[str]]:
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
         return None, 'No valid token provided'
-    
-    token = auth_header.split(' ')[1]
-    print(f"Validating token: {token}")
-    try:
-        user_data = supabase.auth.get_user(token)
-        print(f"User data retrieved: {user_data}")
-        if not user_data or not user_data.user:
-            return None, 'Invalid token'
-        return user_data, None
-    except Exception:
-        return None, 'Failed to validate token'
 
+    token = auth_header.split(' ')[1]
+    try:
+        # verify signature and audience
+        claims = jwt.decode(
+            token,
+            SUPABASE_JWT_SECRET,
+            algorithms=["HS256"],
+            audience="authenticated"
+        )
+        return claims, None
+
+    except jwt.ExpiredSignatureError:
+        return None, 'Token expired'
+    except jwt.InvalidAudienceError:
+        return None, 'Token audience mismatch'
+    except jwt.InvalidTokenError:
+        return None, 'Invalid token'
 
 @maternal_ns.route('/predict')
 class MaternalPrediction(Resource):
@@ -498,7 +505,7 @@ class MaternalPrediction(Resource):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-@fetal_ns.route('/predict')
+@fetal_ns.route('/predict', methods=['POST'])
 class FetalPrediction(Resource):
     @fetal_ns.doc('predict_fetal',
         description='''Analyze fetal health parameters from CTG data.
@@ -509,78 +516,68 @@ class FetalPrediction(Resource):
     @fetal_ns.response(400, 'Bad Request - Invalid input data', error_response)
     @fetal_ns.response(500, 'Server Error - Prediction service unavailable', error_response)
     def post(self):
-        print("[FetalPrediction] Endpoint hit", flush=True)
-        logger.info("[FetalPrediction] Endpoint hit")
-        logger.info(f"Authentication header: {request.headers.get('Authorization')}")
-        '''Predict fetal health status from CTG parameters'''
+        # 1) Validate token & get claims
+        claims, error = validate_token(request)
+        if error:
+            return {'error': error}, 401
+
+        user_id = claims.get('sub')
+        if not user_id:
+            return {'error': 'Token missing subject'}, 401
+        logger.info(f"Authenticated request by user_id: {user_id}")
+        # 2) Parse input JSON
+        data = request.get_json()
+        if not data or 'features' not in data:
+            return {'error': 'Missing required feature data'}, 400
+
+        # 3) Validate & reshape features
+        features = np.array(data['features'], dtype=float)
+        if features.size != 15:
+            return {'error': 'Invalid feature length, expected 15'}, 400
+        features = features.reshape(1, -1)
+
+        # 4) Scale
         try:
-            print("Authentication header: ",request.headers.get('Authorization'))
-            logger.info("Entered try block for fetal prediction")
-            user_data, error = validate_token(request)
-            if error:
-                return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return jsonify({'error': 'Invalid token'}), 401
-
-            # Parse Input Data
-            data = request.get_json()
-            if not data or "features" not in data:
-                return jsonify({'error': 'Missing required feature data'}), 400
-
-            # Ensure feature list has correct length
-            features = np.array(data["features"], dtype=float)
-            expected_feature_length = 15  # Adjust as needed
-            if features.shape[0] != expected_feature_length:
-                return jsonify({'error': f'Invalid feature length, expected {expected_feature_length}'}), 400
-            
-            features = features.reshape(1, -1)
-
-            # Scale features
-            try:
-                scaled_features = fetal_scaler.transform(features)
-            except Exception as e:
-                return jsonify({'error': f'Feature scaling failed: {str(e)}'}), 500
-
-            # Make Prediction
-            try:
-                prediction = int(fetal_model.predict(scaled_features)[0])  # Ensure Python int
-            except Exception as e:
-                return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
-
-            # Map prediction to health status
-            health_status = {1: "Normal", 2: "Suspect", 3: "Pathological"}
-            prediction_result = health_status.get(prediction, "Unknown")
-
-            # Define Feature Names
-            feature_names = [
-                'baseline_value', 'accelerations', 'fetal_movement', 'uterine_contractions',
-                'light_decelerations', 'severe_decelerations', 'prolonged_decelerations',
-                'abnormal_short_term_variability', 'mean_value_of_short_term_variability',
-                'percentage_of_time_with_abnormal_long_term_variability', 'mean_value_of_long_term_variability',
-                'histogram_width', 'histogram_min', 'histogram_max', 'histogram_number_of_peaks'
-            ]
-
-            # Map features to dictionary and ensure all values are Python types
-            feature_dict = {k: float(v) for k, v in zip(feature_names, features.flatten())}
-
-            # Prepare data for Supabase
-            ctg_data = {
-                'UID': user_data.user.id,
-                **feature_dict,
-                'prediction': prediction
-            }
-
-            # Insert Data into Supabase
-            try:
-                supabase.table('ctg').insert(ctg_data).execute()
-            except Exception as e:
-                print(f"Warning: Failed to store CTG data: {str(e)}")
-
-            return jsonify({"prediction": prediction, "status": prediction_result})
-
+            scaled = fetal_scaler.transform(features)
         except Exception as e:
-            return jsonify({"error": f"Unexpected error: {str(e)}"}), 500
+            return {'error': f'Feature scaling failed: {e}'}, 500
+
+        # 5) Predict
+        try:
+            pred = int(fetal_model.predict(scaled)[0])
+        except Exception as e:
+            return {'error': f'Prediction failed: {e}'}, 500
+
+        # 6) Map status
+        status_map = {1: 'Normal', 2: 'Suspect', 3: 'Pathological'}
+        status = status_map.get(pred, 'Unknown')
+
+        # 7) Prepare CTG data
+        feature_names = [
+            'baseline_value','accelerations','fetal_movement','uterine_contractions',
+            'light_decelerations','severe_decelerations','prolonged_decelerations',
+            'abnormal_short_term_variability','mean_value_of_short_term_variability',
+            'percentage_of_time_with_abnormal_long_term_variability',
+            'mean_value_of_long_term_variability','histogram_width','histogram_min',
+            'histogram_max','histogram_number_of_peaks'
+        ]
+        feature_dict = {k: float(v) for k, v in zip(feature_names, features.flatten())}
+
+        ctg_data = {
+            'UID': user_id,
+            **feature_dict,
+            'prediction': pred
+        }
+        logger.info(f"Supabase CTG data: {ctg_data}")
+        logger.info(f"Supabase Key: {SUPABASE_KEY}")
+        # 8) Store to Supabase
+        try:
+            supabase.table('ctg').insert(ctg_data).execute()
+        except Exception as e:
+            logger.warning(f"Failed to store CTG data: {e}")
+
+        # 9) Return response
+        return {'prediction': pred, 'status': status}, 200
 
 @diet_ns.route('/plan')
 class DietPlan(Resource):
@@ -1099,5 +1096,5 @@ class Index(Resource):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(os.environ.get("SUPABASE_KEY"))
+    
     app.run(debug=False, port=port, host="0.0.0.0")
