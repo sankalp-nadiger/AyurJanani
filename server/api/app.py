@@ -462,49 +462,49 @@ class MaternalPrediction(Resource):
     @maternal_ns.response(400, 'Bad Request - Invalid input data', error_response)
     @maternal_ns.response(500, 'Server Error - Prediction service unavailable', error_response)
     def post(self):
-    print("[MaternalPrediction] Endpoint hit", flush=True)
-    logger.info("[MaternalPrediction] Endpoint hit")
-    '''Predict maternal health risks based on vital signs'''
-    try:
-        print("Authentication header: ", request.headers.get('Authorization'))
-        user_data, error = validate_token(request)
-        if error:
-            return {'error': error}, 401
+        print("[MaternalPrediction] Endpoint hit", flush=True)
+        logger.info("[MaternalPrediction] Endpoint hit")
+        '''Predict maternal health risks based on vital signs'''
+        try:
+            print("Authentication header: ", request.headers.get('Authorization'))
+            user_data, error = validate_token(request)
+            if error:
+                return {'error': error}, 401
 
-        if not user_data:
-            return {'error': 'Invalid token'}, 401
+            if not user_data:
+                return {'error': 'Invalid token'}, 401
 
-        data = request.json
-        features = [
-            float(data["age"]),
-            float(data["systolic_bp"]),
-            float(data["diastolic_bp"]),
-            float(data["blood_glucose"]),
-            float(data["body_temp"]),
-            float(data["heart_rate"])
-        ]
-        features = np.array(features).reshape(1, -1)
-        scaled_features = maternal_scaler.transform(features)
-        prediction = maternal_model.predict(scaled_features)
-        risk_mapping = {0: "Normal", 1: "Suspect", 2: "Pathological"}
-        risk_level = risk_mapping[int(prediction[0])]
+            data = request.json
+            features = [
+                float(data["age"]),
+                float(data["systolic_bp"]),
+                float(data["diastolic_bp"]),
+                float(data["blood_glucose"]),
+                float(data["body_temp"]),
+                float(data["heart_rate"])
+            ]
+            features = np.array(features).reshape(1, -1)
+            scaled_features = maternal_scaler.transform(features)
+            prediction = maternal_model.predict(scaled_features)
+            risk_mapping = {0: "Normal", 1: "Suspect", 2: "Pathological"}
+            risk_level = risk_mapping[int(prediction[0])]
 
         # Insert into vitals table   
-        vital_data = {
-            'UID': user_data.user.id,
-            'systolic_bp': data["systolic_bp"],
-            'diastolic_bp': data["diastolic_bp"],
-            'blood_glucose': data["blood_glucose"],
-            'body_temp': data["body_temp"],
-            'heart_rate': data["heart_rate"],
-            'prediction': int(prediction[0])
-        }
-        result = supabase.table('vitals').insert(vital_data).execute()
+            vital_data = {
+                'UID': user_data.user.id,
+                'systolic_bp': data["systolic_bp"],
+                'diastolic_bp': data["diastolic_bp"],
+                'blood_glucose': data["blood_glucose"],
+                'body_temp': data["body_temp"],
+                'heart_rate': data["heart_rate"],
+                'prediction': int(prediction[0])
+            }
+            result = supabase.table('vitals').insert(vital_data).execute()
 
-        return {"prediction": risk_level}, 200
+            return {"prediction": risk_level}, 200
 
-    except Exception as e:
-        return {"error": str(e)}, 500
+        except Exception as e:
+            return {"error": str(e)}, 500
 
 @fetal_ns.route('/predict', methods=['POST'])
 class FetalPrediction(Resource):
