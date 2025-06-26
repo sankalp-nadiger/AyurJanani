@@ -475,15 +475,20 @@ class MaternalPrediction(Resource):
                 return {'error': 'Invalid token'}, 401
 
             data = request.json
-            features = [
-                float(data["age"]),
-                float(data["systolic_bp"]),
-                float(data["diastolic_bp"]),
-                float(data["blood_glucose"]),
-                float(data["body_temp"]),
-                float(data["heart_rate"])
+            FEATURE_NAMES = [
+            "age", "systolic_bp", "diastolic_bp",
+            "blood_glucose", "body_temp", "heart_rate"
             ]
-            features = np.array(features).reshape(1, -1)
+
+            features = pd.DataFrame([[
+            float(data["age"]),
+            float(data["systolic_bp"]),
+            float(data["diastolic_bp"]),
+            float(data["blood_glucose"]),
+            float(data["body_temp"]),
+            float(data["heart_rate"])
+            ]], columns=FEATURE_NAMES)
+
             scaled_features = maternal_scaler.transform(features)
             prediction = maternal_model.predict(scaled_features)
             risk_mapping = {0: "Normal", 1: "Suspect", 2: "Pathological"}
