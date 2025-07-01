@@ -476,19 +476,21 @@ class MaternalPrediction(Resource):
             logger.info(f"Request headers: {dict(request.headers)}")
             logger.info(f"Request body: {request.get_json()}")
             print("Authentication header: ", request.headers.get('Authorization'))
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 logger.warning(f"Token validation error: {error}")
                 return {'error': error}, 401
 
-            if not user_data:
-                logger.warning("No user data after token validation")
-                return {'error': 'Invalid token'}, 401
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                logger.warning("Token missing subject (sub)")
+                return {'error': 'Token missing subject'}, 401
 
+            logger.info(f"Authenticated request by user_id: {user_id}")
             data = request.get_json()
             logger.info(f"Parsed request data: {data}")
 
-            # Map incoming JSON keys to model's expected feature names
+
             FEATURE_NAMES = [
                 "Age", "SystolicBP", "DiastolicBP",
                 "BS", "BodyTemp", "HeartRate"
@@ -496,11 +498,11 @@ class MaternalPrediction(Resource):
             try:
                 features = pd.DataFrame([[
                     float(data["age"]),            
-                    float(data["systolic_bp"]),    
-                    float(data["diastolic_bp"]),  
-                    float(data["blood_glucose"]),  
+                    float(data["systolic_bp"]),  
+                    float(data["diastolic_bp"]),   
+                    float(data["blood_glucose"]), 
                     float(data["body_temp"]),      
-                    float(data["heart_rate"]),     
+                    float(data["heart_rate"]), 
                 ]], columns=FEATURE_NAMES)
             except Exception as e:
                 logger.error(f"Error parsing features from request: {e}")
@@ -528,7 +530,7 @@ class MaternalPrediction(Resource):
 
             # Insert into vitals table   
             vital_data = {
-                'UID': user_data.user.id,
+                'UID': user_id,
                 'systolic_bp': data["systolic_bp"],
                 'diastolic_bp': data["diastolic_bp"],
                 'blood_glucose': data["blood_glucose"],
@@ -637,35 +639,24 @@ class DietPlan(Resource):
         logger.info("[DietPlan] Endpoint hit")
         '''Generate personalized diet plan based on trimester and preferences'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-        
-            token = auth_header.split(' ')[1]
-
-            user_data = supabase.auth.get_user(token)
-
-            if not user_data:
-                return {'error': 'Invalid token'}, 401
-        
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             data = request.get_json()
             if not data:
                 return {'error': 'Missing input data'}, 400
             prompt = f"You are a professional dietician and nutritionist. You suggest excellent diet plans for pregnant women that look after their well being and growth. You will now suggest a diet plan for a {data['trimester']} trimester pregnant woman weighing about {data['weight']} kg, who is feeling {data['health_conditions']} and has strict dietary preferences as follows: {data['dietary_preference']}. Do not suggest any foods that can cause harm or go against the dietary preferences. Suggest both a vegetarian only and a non-vegetarian diet plan separately for her and just give the plan."
-
-            response = chat(model=OLLAMA_MODEL_ID, messages=[
-            {'role':'user','content':prompt}
-            ])
-
-        # Store the diet plan in the database
+            response = chat(model=OLLAMA_MODEL_ID, messages=[{'role':'user','content':prompt}])
             diet_data = {
-            'UID': user_data.user.id,
-            'diet_plan': response.message.content # Stored as markdown
+                'UID': user_id,
+                'diet_plan': response.message.content
             }
-
-            return jsonify({"diet_plan": response.message.content})
+            return {'diet_plan': response.message.content}, 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return {'error': str(e)}, 500
     
 @chat_ns.route('/history')
 class ChatBot(Resource):
@@ -681,28 +672,23 @@ class ChatBot(Resource):
         logger.info("[ChatBot GET] Endpoint hit")
         '''Get chat history for the current user'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-            
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-            
-            # Get the chat from the database
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             chat_data = supabase.table('chats')\
                 .select()\
-                .eq('UID', user_data.user.id)\
+                .eq('UID', user_id)\
                 .order('created_at', desc=True)\
                 .limit(1)\
                 .execute()
-
             if not chat_data.data:
-                return jsonify([])  # Return empty chat history if none exists
-                
-            return jsonify(chat_data.data[0]['chat_history'])
-            
+                return [], 200
+            return chat_data.data[0]['chat_history'], 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return {'error': str(e)}, 500
 
     @chat_ns.doc('send_message',
         description='''Send a message to the AI assistant.
@@ -717,50 +703,39 @@ class ChatBot(Resource):
         logger.info("[ChatBot POST] Endpoint hit")
         '''Send a message to the AI assistant'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-            
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             data = request.get_json()
             if not data or 'message' not in data:
                 return {'error': 'Missing message'}, 400
-
-            # Get the chat from the database
             chat_data = supabase.table('chats')\
                 .select()\
-                .eq('UID', user_data.user.id)\
+                .eq('UID', user_id)\
                 .order('created_at', desc=True)\
                 .limit(1)\
                 .execute()
-
             if not chat_data.data:
                 chat_history = [{'role':'system','content':"You are AyurJanani, an AI assistant that is here to help you with the user's pregnancy journey and clear any doubts in ayurveda. You will only provide information that is accurate and helpful to the user. You will not provide any medical advice or diagnosis. You will not provide any information that is not related to pregnancy or ayurveda. You will be polite and respectful to the user at all times."}]
             else:
                 chat_history = chat_data.data[0]['chat_history']
-
             prompt = data['message']
             chat_history.append({'role':'user','content':prompt})
-            
-            # Get response from Ollama
             response = chat(model=OLLAMA_MODEL_ID, messages=chat_history)
-
-            # Update the chat history
             chat_history.append({'role':'assistant','content':response.message.content})
-            
             try:
                 supabase.table('chats').upsert({
-                    'UID': user_data.user.id, 
+                    'UID': user_id,
                     'chat_history': chat_history
                 }).execute()
             except Exception as e:
-                print(f"Warning: Failed to store chat history: {str(e)}")
-
-            return jsonify({"response": response.message.content})
+                logger.warning(f"Failed to store chat history: {str(e)}")
+            return {'response': response.message.content}, 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return {'error': str(e)}, 500
     
 @ayurveda_ns.route('/classify_symptoms')
 class SymptomClassification(Resource):
@@ -777,58 +752,44 @@ class SymptomClassification(Resource):
         logger.info("[SymptomClassification] Endpoint hit")
         '''Classify reported symptoms into standardized categories'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             data = request.get_json()
             if not data or "symptoms" not in data:
-                return jsonify({'error': 'Missing symptoms data'}), 400
-
+                return {'error': 'Missing symptoms data'}, 400
             symptoms = data["symptoms"]
             if not isinstance(symptoms, (str, list)):
-                return jsonify({'error': 'Symptoms must be text or list'}), 400
-
+                return {'error': 'Symptoms must be text or list'}, 400
             if symptom_classifier is None:
-                return jsonify({'error': 'Symptom classification service unavailable'}), 500
-
-            # Convert list to text if needed
+                return {'error': 'Symptom classification service unavailable'}, 500
             symptom_text = " ".join(symptoms) if isinstance(symptoms, list) else symptoms
-            
-            # Perform classification
             try:
                 classified_symptoms = symptom_classifier.predict([symptom_text])[0]
                 confidence_scores = symptom_classifier.predict_proba([symptom_text])[0]
-                
-                # Format results
                 classification_result = {
                     'categories': classified_symptoms,
                     'confidence': float(max(confidence_scores))
                 }
-                
-                # Store in Supabase
                 symptom_data = {
-                    'UID': user_data.user.id,
+                    'UID': user_id,
                     'reported_symptoms': symptom_text,
                     'classified_categories': classified_symptoms,
                     'confidence': float(max(confidence_scores)),
                     'recorded_at': datetime.utcnow().isoformat()
                 }
-                
                 try:
                     supabase.table('symptoms').insert(symptom_data).execute()
                 except Exception as e:
-                    print(f"Warning: Failed to store symptom data: {str(e)}")
-                
-                return jsonify(classification_result)
+                    logger.warning(f"Failed to store symptom data: {str(e)}")
+                return classification_result, 200
             except Exception as e:
-                return jsonify({'error': f'Classification failed: {str(e)}'}), 500
-                
+                return {'error': f'Classification failed: {str(e)}'}, 500
         except Exception as e:
-            return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+            return {'error': f'Unexpected error: {str(e)}'}, 500
 
 @ayurveda_ns.route('/map_symptom_risk')
 class SymptomRiskMapping(Resource):
@@ -845,47 +806,35 @@ class SymptomRiskMapping(Resource):
         logger.info("[SymptomRiskMapping] Endpoint hit")
         '''Map symptoms to potential pregnancy risks using symptoms, vitals, and diagnosis'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             data = request.get_json()
             if not data or "symptom_categories" not in data:
-                return jsonify({'error': 'Missing symptom categories'}), 400
-
+                return {'error': 'Missing symptom categories'}, 400
             if symptom_risk_model is None:
-                return jsonify({'error': 'Risk mapping service unavailable'}), 500
-
+                return {'error': 'Risk mapping service unavailable'}, 500
             symptom_categories = data["symptom_categories"]
-            uid = user_data.user.id
-
-            # 1. Get historical symptoms
             historical_data = supabase.table('symptoms')\
                 .select('classified_categories')\
-                .eq('UID', uid)\
+                .eq('UID', user_id)\
                 .order('recorded_at', desc=True)\
                 .limit(5)\
                 .execute()
-
             all_symptoms = symptom_categories.copy()
             for record in historical_data.data:
                 all_symptoms.extend(record['classified_categories'])
             all_symptoms = list(dict.fromkeys(all_symptoms))
-
-            # 2. Get latest vitals
             vitals_data = supabase.table("vitals")\
                 .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
-                .eq("UID", uid)\
+                .eq("UID", user_id)\
                 .order("inserted_at", desc=True)\
                 .limit(1)\
                 .execute()
-
             vitals = vitals_data.data[0] if vitals_data.data else {}
-
-            # Prepare feature vector
             combined_features = {
                 "symptoms": all_symptoms,
                 "systolic_bp": vitals.get("systolic_bp", 120),
@@ -894,15 +843,11 @@ class SymptomRiskMapping(Resource):
                 "body_temp": vitals.get("body_temp", 36.8),
                 "heart_rate": vitals.get("heart_rate", 78)
             }
-
-            # Create vectorizer for symptoms
             vectorizer = DictVectorizer(sparse=False)
             X_input = vectorizer.fit_transform([combined_features])
-
             try:
                 risks = symptom_risk_model.predict([X_input])[0]
                 probs = symptom_risk_model.predict_proba([X_input])[0]
-                
                 risks_result = [
                     {
                         'risk_type': risk,
@@ -911,27 +856,21 @@ class SymptomRiskMapping(Resource):
                     }
                     for risk, prob in zip(risks, probs)
                 ]
-
-                # Store risk assessment
                 risk_data = {
-                    'UID': uid,
+                    'UID': user_id,
                     'symptoms': all_symptoms,
                     'risks': risks_result,
                     'assessed_at': datetime.utcnow().isoformat()
                 }
-
                 try:
                     supabase.table('risk_assessments').insert(risk_data).execute()
                 except Exception as e:
-                    print(f"Warning: Failed to store risk assessment: {str(e)}")
-
-                return jsonify({'risks': risks_result})
-
+                    logger.warning(f"Failed to store risk assessment: {str(e)}")
+                return {'risks': risks_result}, 200
             except Exception as e:
-                return jsonify({'error': f'Risk prediction failed: {str(e)}'}), 500
-
+                return {'error': f'Risk prediction failed: {str(e)}'}, 500
         except Exception as e:
-            return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
+            return {'error': f'Unexpected error: {str(e)}'}, 500
 
 @generate_recommendations.route('/')
 class GenerateRecommendations(Resource):
@@ -947,36 +886,26 @@ class GenerateRecommendations(Resource):
         logger.info("[GenerateRecommendations] Endpoint hit")
         '''Generate personalized lifestyle recommendations'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-
-            uid = user_data.user.id
-
-            # Get recent symptoms
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             symptoms = supabase.table("symptoms")\
                 .select("classified_categories")\
-                .eq("UID", uid)\
+                .eq("UID", user_id)\
                 .order("recorded_at", desc=True)\
                 .limit(3)\
                 .execute()
-
             recent_symptoms = [s["classified_categories"] for s in symptoms.data]
-
-            # Get latest vitals
             vitals = supabase.table("vitals")\
                 .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
-                .eq("UID", uid)\
+                .eq("UID", user_id)\
                 .order("inserted_at", desc=True)\
                 .limit(1)\
                 .execute()
-
             vitals_data = vitals.data[0] if vitals.data else {}
-
-            # Build prompt
             prompt = (
                 f"You are a prenatal wellness expert. Create lifestyle suggestions including: "
                 f"1. A short daily self-care activity\n"
@@ -987,31 +916,25 @@ class GenerateRecommendations(Resource):
                 f"Recent symptoms: {', '.join(sum(recent_symptoms, []))}\n"
                 f"Vitals: BP {vitals_data.get('systolic_bp', 'N/A')}/{vitals_data.get('diastolic_bp', 'N/A')}, "
                 f"Glucose: {vitals_data.get('blood_glucose', 'N/A')}, HR: {vitals_data.get('heart_rate', 'N/A')}"
-
             )
-
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
-
             result = {
                 "self_care": extract_section(response.message.content, "self-care"),
                 "music": extract_section(response.message.content, "music"),
                 "exercise": extract_section(response.message.content, "exercise"),
                 "ayurveda_tip": extract_section(response.message.content, "Ayurveda")
             }
-
             try:
                 supabase.table("recommendations").upsert({
-                    "UID": uid,
+                    "UID": user_id,
                     "content": result,
                     "created_at": datetime.utcnow().isoformat()
                 }).execute()
             except Exception as e:
-                print(f"Warning: Failed to store recommendations: {str(e)}")
-
-            return jsonify(result)
-            
+                logger.warning(f"Failed to store recommendations: {str(e)}")
+            return result, 200
         except Exception as e:
-            return jsonify({"error": str(e)}), 500
+            return {'error': str(e)}, 500
 
 def extract_section(text, section_name):
     for line in text.splitlines():
@@ -1034,22 +957,17 @@ class RemedyRecommendation(Resource):
         logger.info("[RemedyRecommendation] Endpoint hit")
         '''Get personalized Ayurvedic remedy recommendations'''
         try:
-            user_data, error = validate_token(request)
+            claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-
-            if not user_data or not user_data.user:
-                return {'error': 'Invalid token'}, 401
-
-            uid = user_data.user.id
+            user_id = claims.get('sub') if claims else None
+            if not user_id:
+                return {'error': 'Token missing subject'}, 401
             data = request.get_json()
             if not data or 'symptoms' not in data or 'prakriti' not in data:
                 return {'error': 'Missing required fields (symptoms and/or prakriti)'}, 400
-
             symptoms = data["symptoms"]
             prakriti = data["prakriti"]
-
-            # Get diagnosis from Node API
             try:
                 headers = {'Node-Token': data.get('node_token')}
                 diagnosis_response = requests.get(
@@ -1059,22 +977,18 @@ class RemedyRecommendation(Resource):
                 diagnosis_data = diagnosis_response.json().get("recent_diagnoses", [])
             except Exception as e:
                 diagnosis_data = []
-                print(f"Warning: Could not fetch diagnosis from Node: {e}")
-
-            # Get vitals from Supabase
+                logger.warning(f"Could not fetch diagnosis from Node: {e}")
             try:
                 vitals_data = supabase.table("vitals")\
                     .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
-                    .eq("UID", uid)\
+                    .eq("UID", user_id)\
                     .order("inserted_at", desc=True)\
                     .limit(1)\
                     .execute()
                 vitals = vitals_data.data[0] if vitals_data.data else {}
             except Exception as e:
                 vitals = {}
-                print(f"Warning: Could not fetch vitals: {e}")
-
-            # Generate prompt
+                logger.warning(f"Could not fetch vitals: {e}")
             prompt = (
                 f"You are an expert Ayurvedic practitioner. Suggest safe and personalized remedies "
                 f"for a pregnant woman with the following details:\n"
@@ -1086,19 +1000,15 @@ class RemedyRecommendation(Resource):
                 f"Suggest 2–3 Ayurvedic remedies only from safe ingredients (no toxic herbs). "
                 f"Mention how to use them (e.g., morning/evening, with food, etc.). Avoid overlapping with existing prescriptions."
             )
-
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
-
-            # Format & Store
             remedy_text = response.message.content.strip()
             remedy_list = [
                 {"remedy": line.strip(), "confidence": 1.0}
                 for line in remedy_text.split("\n") 
                 if line.strip()
             ]
-
             remedy_data = {
-                'UID': uid,
+                'UID': user_id,
                 'symptoms': symptoms,
                 'prakriti': prakriti,
                 'diagnoses': diagnosis_data,
@@ -1106,16 +1016,13 @@ class RemedyRecommendation(Resource):
                 'raw_prompt': prompt,
                 'recorded_at': datetime.utcnow().isoformat()
             }
-
             try:
                 supabase.table('remedy_recommendations').insert(remedy_data).execute()
             except Exception as e:
-                print(f"Warning: Failed to store remedy recommendations: {str(e)}")
-
-            return jsonify({"remedies": remedy_list})
-
+                logger.warning(f"Failed to store remedy recommendations: {str(e)}")
+            return {'remedies': remedy_list}, 200
         except Exception as e:
-            return jsonify({'error': str(e)}), 500
+            return {'error': str(e)}, 500
 
 
 def encode_features_for_model(features: dict):
