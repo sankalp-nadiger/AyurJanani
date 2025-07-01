@@ -473,35 +473,60 @@ class MaternalPrediction(Resource):
         logger.info("[MaternalPrediction] Endpoint hit")
         '''Predict maternal health risks based on vital signs'''
         try:
+            logger.info(f"Request headers: {dict(request.headers)}")
+            logger.info(f"Request body: {request.get_json()}")
             print("Authentication header: ", request.headers.get('Authorization'))
             user_data, error = validate_token(request)
             if error:
+                logger.warning(f"Token validation error: {error}")
                 return {'error': error}, 401
 
             if not user_data:
+                logger.warning("No user data after token validation")
                 return {'error': 'Invalid token'}, 401
 
-            data = request.json
+            data = request.get_json()
+            logger.info(f"Parsed request data: {data}")
+
+            # Map incoming JSON keys to model's expected feature names
             FEATURE_NAMES = [
-            "age", "systolic_bp", "diastolic_bp",
-            "blood_glucose", "body_temp", "heart_rate"
+                "Age", "SystolicBP", "DiastolicBP",
+                "BS", "BodyTemp", "HeartRate"
             ]
+            try:
+                features = pd.DataFrame([[
+                    float(data["age"]),            
+                    float(data["systolic_bp"]),    
+                    float(data["diastolic_bp"]),  
+                    float(data["blood_glucose"]),  
+                    float(data["body_temp"]),      
+                    float(data["heart_rate"]),     
+                ]], columns=FEATURE_NAMES)
+            except Exception as e:
+                logger.error(f"Error parsing features from request: {e}")
+                return {"error": f"Invalid input data: {e}"}, 400
 
-            features = pd.DataFrame([[
-            float(data["age"]),
-            float(data["systolic_bp"]),
-            float(data["diastolic_bp"]),
-            float(data["blood_glucose"]),
-            float(data["body_temp"]),
-            float(data["heart_rate"])
-            ]], columns=FEATURE_NAMES)
+            logger.info(f"Features DataFrame: {features}")
 
-            scaled_features = maternal_scaler.transform(features)
-            prediction = maternal_model.predict(scaled_features)
+            try:
+                scaled_features = maternal_scaler.transform(features)
+                logger.info(f"Scaled features: {scaled_features}")
+            except Exception as e:
+                logger.error(f"Error scaling features: {e}")
+                return {"error": f"Feature scaling failed: {e}"}, 500
+
+            try:
+                prediction = maternal_model.predict(scaled_features)
+                logger.info(f"Model prediction: {prediction}")
+            except Exception as e:
+                logger.error(f"Error in model prediction: {e}")
+                return {"error": f"Prediction failed: {e}"}, 500
+
             risk_mapping = {0: "Normal", 1: "Suspect", 2: "Pathological"}
-            risk_level = risk_mapping[int(prediction[0])]
+            risk_level = risk_mapping.get(int(prediction[0]), "Unknown")
+            logger.info(f"Predicted risk level: {risk_level}")
 
-        # Insert into vitals table   
+            # Insert into vitals table   
             vital_data = {
                 'UID': user_data.user.id,
                 'systolic_bp': data["systolic_bp"],
@@ -511,11 +536,17 @@ class MaternalPrediction(Resource):
                 'heart_rate': data["heart_rate"],
                 'prediction': int(prediction[0])
             }
-            result = supabase.table('vitals').insert(vital_data).execute()
+            logger.info(f"Inserting vitals data: {vital_data}")
+            try:
+                result = supabase.table('vitals').insert(vital_data).execute()
+                logger.info(f"Supabase insert result: {result}")
+            except Exception as e:
+                logger.warning(f"Failed to insert vitals into Supabase: {e}")
 
             return {"prediction": risk_level}, 200
 
         except Exception as e:
+            logger.error(f"Unhandled error in maternal prediction: {e}", exc_info=True)
             return {"error": str(e)}, 500
 
 @fetal_ns.route('/predict', methods=['POST'])
