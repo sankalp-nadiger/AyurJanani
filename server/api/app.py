@@ -14,6 +14,7 @@ from sklearn.feature_extraction import DictVectorizer
 from flask_restx import Api, Resource, fields, Namespace
 from supabase import create_client, Client
 import logging
+from ml_models import SymptomClassifier, SymptomRiskModel, RemedyRecommendationModel
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,8 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 # Load ML Models
 MODEL_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models')
 
+
+
 def load_model_safely(model_path: str, error_msg: str) -> Optional[object]:
     """Safely load a machine learning model with error handling."""
     try:
@@ -388,18 +391,19 @@ fetal_scaler = joblib.load("scaleX1.pkl")
 
 # Load new Ayurvedic models from models directory
 symptom_classifier = load_model_safely(
-    os.path.join(MODEL_PATH, 'ayurvedic/symptom_classifier_model.pkl'),
+    os.path.join(MODEL_PATH, 'ayurvedic', 'symptom_classifier_model.pkl'),
     'Symptom classification may be limited'
 )
 
 symptom_risk_model = load_model_safely(
-    os.path.join(MODEL_PATH, 'ayurvedic/symptom_risk_model.pkl'),
+    os.path.join(MODEL_PATH, 'ayurvedic', 'symptom_risk_model.pkl'),
     'Risk prediction may be limited'
 )
 
 remedy_model = load_model_safely(
-    os.path.join(MODEL_PATH, 'ayurvedic/remedy_model.pkl'),
-    'Remedy suggestions may be limited')
+    os.path.join(MODEL_PATH, 'ayurvedic', 'remedy_model.pkl'),
+    'Remedy suggestions may be limited'
+)
 
 # Custom chat function to replace ollama-python client
 def chat(model, messages):
@@ -411,15 +415,18 @@ def chat(model, messages):
             f"{OLLAMA_API_HOST}/api/chat",
             json={"model": model, "messages": messages}
         )
-        
+        response.raise_for_status()
         result = response.json()
         # Format response to match original ollama-python structure
         class DotDict(dict):
             """Dot notation access to dictionary attributes"""
-            __getattr__ = dict.get
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(name)
             __setattr__ = dict.__setitem__
             __delattr__ = dict.__delitem__
-            
         result_obj = DotDict(result)
         result_obj.message = DotDict(result.get("message", {}))
         return result_obj
@@ -610,6 +617,9 @@ class DietPlan(Resource):
             if not user_data:
                 return {'error': 'Invalid token'}, 401
         
+            data = request.get_json()
+            if not data:
+                return {'error': 'Missing input data'}, 400
             prompt = f"You are a professional dietician and nutritionist. You suggest excellent diet plans for pregnant women that look after their well being and growth. You will now suggest a diet plan for a {data['trimester']} trimester pregnant woman weighing about {data['weight']} kg, who is feeling {data['health_conditions']} and has strict dietary preferences as follows: {data['dietary_preference']}. Do not suggest any foods that can cause harm or go against the dietary preferences. Suggest both a vegetarian only and a non-vegetarian diet plan separately for her and just give the plan."
 
             response = chat(model=OLLAMA_MODEL_ID, messages=[
