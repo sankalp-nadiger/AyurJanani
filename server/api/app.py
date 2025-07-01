@@ -408,30 +408,42 @@ remedy_model = load_model_safely(
 # Custom chat function to replace ollama-python client
 def chat(model, messages):
     """
-    Send a chat request to Ollama API using the requests library
+    Send a chat request to Groq API (OpenAI-compatible) using the requests library
     """
+    import os
+    import requests
+    class DotDict(dict):
+        """Dot notation access to dictionary attributes"""
+        def __getattr__(self, name):
+            try:
+                return self[name]
+            except KeyError:
+                raise AttributeError(name)
+        __setattr__ = dict.__setitem__
+        __delattr__ = dict.__delitem__
+
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY environment variable not set.")
+    GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": model,
+        "messages": messages
+    }
     try:
-        response = requests.post(
-            f"{OLLAMA_API_HOST}/api/chat",
-            json={"model": model, "messages": messages}
-        )
+        response = requests.post(GROQ_API_URL, headers=headers, json=payload)
         response.raise_for_status()
         result = response.json()
-        # Format response to match original ollama-python structure
-        class DotDict(dict):
-            """Dot notation access to dictionary attributes"""
-            def __getattr__(self, name):
-                try:
-                    return self[name]
-                except KeyError:
-                    raise AttributeError(name)
-            __setattr__ = dict.__setitem__
-            __delattr__ = dict.__delitem__
-        result_obj = DotDict(result)
-        result_obj.message = DotDict(result.get("message", {}))
+        # Emulate Ollama's response structure for compatibility
+        message_content = result["choices"][0]["message"]["content"]
+        result_obj = DotDict({"message": DotDict({"content": message_content})})
         return result_obj
     except Exception as e:
-        print(f"Error in chat function: {str(e)}")
+        print(f"Error in chat function (Groq): {str(e)}")
         raise
 
 # Utility function for token validation
