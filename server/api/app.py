@@ -848,7 +848,7 @@ class SymptomRiskMapping(Resource):
             vitals_data = supabase.table("vitals")\
                 .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
                 .eq("UID", user_id)\
-                .order("inserted_at", desc=True)\
+                .order("created_at", desc=True)\
                 .limit(1)\
                 .execute()
             vitals = vitals_data.data[0] if vitals_data.data else {}
@@ -892,9 +892,8 @@ class SymptomRiskMapping(Resource):
 @generate_recommendations.route('/')
 class GenerateRecommendations(Resource):
     @generate_recommendations.doc('generate_recommendations',
-        description='''Generate personalized lifestyle recommendations.
-        Provides daily activities, music, exercises, and Ayurvedic tips based on health data.''')
-    @api.expect(auth_header, node_auth)
+        description='''Generate personalized lifestyle recommendations.\nProvides daily activities, music, exercises, and Ayurvedic tips based on health data.''')
+    @api.expect(auth_header)
     @api.response(200, 'Success', recommendation_response)
     @api.response(401, 'Unauthorized - Invalid or missing token', error_response)
     @api.response(500, 'Server Error - Recommendation service unavailable', error_response)
@@ -992,7 +991,7 @@ class RemedyRecommendation(Resource):
                 vitals_data = supabase.table("vitals")\
                     .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
                     .eq("UID", user_id)\
-                    .order("inserted_at", desc=True)\
+                    .order("created_at", desc=True)\
                     .limit(1)\
                     .execute()
                 vitals = vitals_data.data[0] if vitals_data.data else {}
