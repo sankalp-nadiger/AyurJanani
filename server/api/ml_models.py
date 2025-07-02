@@ -5,6 +5,7 @@ class SymptomClassifier:
         self.label_binarizer = label_binarizer
 
     def predict(self, texts):
+        import random
         if isinstance(texts, str):
             texts = [texts]
         X = self.vectorizer.transform(texts)
@@ -22,8 +23,15 @@ class SymptomClassifier:
                     # Match if label as phrase or as token is present in input
                     if label_clean in input_text or label.lower() in input_text:
                         matched.append(label)
-                if matched:
-                    labels = tuple(sorted(set(matched)))
+                # If multiple categories, randomly select one or a subset (but always include imbalance categories if present)
+                imbalance_labels = [l for l in matched if 'imbalance' in l]
+                if imbalance_labels:
+                    # Always include all imbalance categories found
+                    labels = tuple(sorted(set(imbalance_labels + matched)))
+                elif matched:
+                    # If multiple, randomly select 1-2 (or all if only 1-2)
+                    n = min(len(matched), 2)
+                    labels = tuple(sorted(random.sample(matched, n)))
             results.append(labels)
         return results
 

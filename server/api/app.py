@@ -865,14 +865,16 @@ class SymptomRiskMapping(Resource):
             try:
                 risks = symptom_risk_model.predict([X_input])[0]
                 probs = symptom_risk_model.predict_proba([X_input])[0]
-                risks_result = [
-                    {
-                        'risk_type': risk,
-                        'probability': float(prob),
-                        'severity': 'high' if prob > 0.7 else 'medium' if prob > 0.4 else 'low'
-                    }
-                    for risk, prob in zip(risks, probs)
-                ]
+                risk_labels = symptom_risk_model.label_binarizer.classes_ if hasattr(symptom_risk_model, 'label_binarizer') else []
+                risks_result = []
+                for idx, label in enumerate(risk_labels):
+                    prob = float(probs[idx])
+                    if label in risks:
+                        risks_result.append({
+                            'risk_type': label,
+                            'probability': prob,
+                            'severity': 'high' if prob > 0.7 else 'medium' if prob > 0.4 else 'low'
+                        })
                 risk_data = {
                     'UID': user_id,
                     'symptoms': all_symptoms,
