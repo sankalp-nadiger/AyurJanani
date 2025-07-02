@@ -660,7 +660,7 @@ class DietPlan(Resource):
             data = request.get_json()
             if not data:
                 return {'error': 'Missing input data'}, 400
-            prompt = f"You are a professional dietician and nutritionist. You suggest excellent diet plans for pregnant women that look after their well being and growth. You will now suggest a diet plan for a {data['trimester']} trimester pregnant woman weighing about {data['weight']} kg, who is feeling {data['health_conditions']} and has strict dietary preferences as follows: {data['dietary_preference']}. Do not suggest any foods that can cause harm or go against the dietary preferences. Suggest both a vegetarian only and a non-vegetarian diet plan separately for her and just give the plan."
+            prompt = f"You are a professional dietician and nutritionist. You suggest excellent diet plans for pregnant women that look after their well being and growth. You will now suggest a diet plan for a {data['trimester']} trimester pregnant woman weighing about {data['weight']} kg, who is feeling {data['health_conditions']} and has strict dietary preferences as follows: {data['dietary_preference']}. Do not suggest any foods that can cause harm or go against the dietary preferences. Integrate Ayurveda recipies into your recommendation, emphasize its benefits, and let natural choices be a high priority. Be clearer and concise in your response, providing a meal plan for the day with breakfast, lunch, snacks, and dinner. Include portion sizes and any specific Ayurvedic ingredients that would be beneficial for her condition."
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role':'user','content':prompt}])
             diet_data = {
                 'UID': user_id,
@@ -779,9 +779,13 @@ class SymptomClassification(Resource):
             if symptom_classifier is None:
                 return {'error': 'Symptom classification service unavailable'}, 500
             symptom_text = " ".join(symptoms) if isinstance(symptoms, list) else symptoms
+            logger.info(f"[SymptomClassification] Input symptom_text: {symptom_text}")
             try:
-                classified_symptoms = symptom_classifier.predict([symptom_text])[0]
+                prediction_raw = symptom_classifier.predict([symptom_text])
+                logger.info(f"[SymptomClassification] Raw model prediction: {prediction_raw}")
+                classified_symptoms = prediction_raw[0]
                 confidence_scores = symptom_classifier.predict_proba([symptom_text])[0]
+                logger.info(f"[SymptomClassification] Model confidence scores: {confidence_scores}")
                 classification_result = {
                     'categories': classified_symptoms,
                     'confidence': float(max(confidence_scores))
@@ -799,6 +803,7 @@ class SymptomClassification(Resource):
                     logger.warning(f"Failed to store symptom data: {str(e)}")
                 return classification_result, 200
             except Exception as e:
+                logger.error(f"[SymptomClassification] Exception: {str(e)}", exc_info=True)
                 return {'error': f'Classification failed: {str(e)}'}, 500
         except Exception as e:
             return {'error': f'Unexpected error: {str(e)}'}, 500
@@ -914,7 +919,7 @@ class GenerateRecommendations(Resource):
             vitals = supabase.table("vitals")\
                 .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
                 .eq("UID", user_id)\
-                .order("inserted_at", desc=True)\
+                .order("created_at", desc=True)\
                 .limit(1)\
                 .execute()
             vitals_data = vitals.data[0] if vitals.data else {}
@@ -936,14 +941,6 @@ class GenerateRecommendations(Resource):
                 "exercise": extract_section(response.message.content, "exercise"),
                 "ayurveda_tip": extract_section(response.message.content, "Ayurveda")
             }
-            try:
-                supabase.table("recommendations").upsert({
-                    "UID": user_id,
-                    "content": result,
-                    "created_at": datetime.utcnow().isoformat()
-                }).execute()
-            except Exception as e:
-                logger.warning(f"Failed to store recommendations: {str(e)}")
             return result, 200
         except Exception as e:
             return {'error': str(e)}, 500
@@ -967,7 +964,7 @@ class RemedyRecommendation(Resource):
     def post(self):
         print("[RemedyRecommendation] Endpoint hit", flush=True)
         logger.info("[RemedyRecommendation] Endpoint hit")
-        '''Get personalized Ayurvedic remedy recommendations'''
+        '''Get personalized Ayurvedic remedy recommendations (let chat decide prakriti)'''
         try:
             claims, error = validate_token(request)
             if error:
@@ -976,17 +973,18 @@ class RemedyRecommendation(Resource):
             if not user_id:
                 return {'error': 'Token missing subject'}, 401
             data = request.get_json()
-            if not data or 'symptoms' not in data or 'prakriti' not in data:
-                return {'error': 'Missing required fields (symptoms and/or prakriti)'}, 400
+            if not data or 'symptoms' not in data:
+                return {'error': 'Missing required field: symptoms'}, 400
             symptoms = data["symptoms"]
-            prakriti = data["prakriti"]
             try:
-                headers = {'Node-Token': data.get('node_token')}
-                diagnosis_response = requests.get(
-                    f"http://your-node-api.com/api/reports/diagnosis",
-                    headers=headers
-                )
-                diagnosis_data = diagnosis_response.json().get("recent_diagnoses", [])
+                headers = {'Node-Token': data.get('node_token')} if 'node_token' in data else {}
+                diagnosis_data = []
+                if headers:
+                    diagnosis_response = requests.get(
+                        f"http://your-node-api.com/api/reports/diagnosis",
+                        headers=headers
+                    )
+                    diagnosis_data = diagnosis_response.json().get("recent_diagnoses", [])
             except Exception as e:
                 diagnosis_data = []
                 logger.warning(f"Could not fetch diagnosis from Node: {e}")
@@ -1002,21 +1000,28 @@ class RemedyRecommendation(Resource):
                 vitals = {}
                 logger.warning(f"Could not fetch vitals: {e}")
             prompt = (
-                f"You are an expert Ayurvedic practitioner. Suggest safe and personalized remedies "
-                f"for a pregnant woman with the following details:\n"
-                f"- Prakriti: {prakriti}\n"
+                f"You are an expert Ayurvedic practitioner. Based on the following details, first decide the user's prakriti (body type) as one of: Vata, Pitta, Kapha, Vata-Pitta, Pitta-Kapha, Vata-Kapha, or Tridoshic, and then suggest safe and personalized remedies. "
+                f"For a pregnant woman with the following details:\n"
                 f"- Reported symptoms: {', '.join(symptoms)}\n"
                 f"- Known diagnoses: {', '.join(diagnosis_data) if diagnosis_data else 'None'}\n"
                 f"- Recent vitals: BP: {vitals.get('systolic_bp', 'N/A')}/{vitals.get('diastolic_bp', 'N/A')}, "
                 f"Glucose: {vitals.get('blood_glucose', 'N/A')}, HR: {vitals.get('heart_rate', 'N/A')}\n"
                 f"Suggest 2–3 Ayurvedic remedies only from safe ingredients (no toxic herbs). "
-                f"Mention how to use them (e.g., morning/evening, with food, etc.). Avoid overlapping with existing prescriptions."
+                f"Mention how to use them (e.g., morning/evening, with food, etc.). Avoid overlapping with existing prescriptions. "
+                f"First, state the prakriti you have determined, then list the remedies."
             )
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
             remedy_text = response.message.content.strip()
+            # Try to extract prakriti from the first line if present
+            lines = remedy_text.split("\n")
+            prakriti = None
+            if lines and (':' in lines[0] or 'prakriti' in lines[0].lower()):
+                prakriti = lines[0].split(":", 1)[-1].strip() if ':' in lines[0] else lines[0].strip()
+            # Extract remedies (skip first line if it's prakriti)
+            remedy_lines = lines[1:] if prakriti else lines
             remedy_list = [
                 {"remedy": line.strip(), "confidence": 1.0}
-                for line in remedy_text.split("\n") 
+                for line in remedy_lines
                 if line.strip()
             ]
             remedy_data = {
@@ -1032,7 +1037,7 @@ class RemedyRecommendation(Resource):
                 supabase.table('remedy_recommendations').insert(remedy_data).execute()
             except Exception as e:
                 logger.warning(f"Failed to store remedy recommendations: {str(e)}")
-            return {'remedies': remedy_list}, 200
+            return {'prakriti': prakriti, 'remedies': remedy_list}, 200
         except Exception as e:
             return {'error': str(e)}, 500
 
