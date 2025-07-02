@@ -860,11 +860,9 @@ class SymptomRiskMapping(Resource):
                 "body_temp": vitals.get("body_temp", 36.8),
                 "heart_rate": vitals.get("heart_rate", 78)
             }
-            vectorizer = DictVectorizer(sparse=False)
-            X_input = vectorizer.fit_transform([combined_features])
             try:
-                risks = symptom_risk_model.predict([X_input])[0]
-                probs = symptom_risk_model.predict_proba([X_input])[0]
+                risks = symptom_risk_model.predict([combined_features])[0]
+                probs = symptom_risk_model.predict_proba([combined_features])[0]
                 risk_labels = symptom_risk_model.label_binarizer.classes_ if hasattr(symptom_risk_model, 'label_binarizer') else []
                 risks_result = []
                 for idx, label in enumerate(risk_labels):
@@ -887,7 +885,13 @@ class SymptomRiskMapping(Resource):
                     logger.warning(f"Failed to store risk assessment: {str(e)}")
                 return {'risks': risks_result}, 200
             except Exception as e:
-                return {'error': f'Risk prediction failed: {str(e)}'}, 500
+                logger.warning(f"Risk prediction failed: {str(e)}")
+                # Fallback: just return the risks as a list if possible
+                try:
+                    risks = symptom_risk_model.predict([combined_features])[0]
+                    return {'risks': list(risks)}, 200
+                except Exception as e2:
+                    return {'error': f'Risk prediction failed: {str(e2)}'}, 500
         except Exception as e:
             return {'error': f'Unexpected error: {str(e)}'}, 500
 
@@ -936,14 +940,12 @@ class GenerateRecommendations(Resource):
                 f"Glucose: {vitals_data.get('blood_glucose', 'N/A')}, HR: {vitals_data.get('heart_rate', 'N/A')}"
             )
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
-            logger.info(f"[GenerateRecommendations] Raw chat response: {response.message.content}")
             result = {
                 "self_care": extract_section(response.message.content, "self-care"),
                 "music": extract_section(response.message.content, "music"),
                 "exercise": extract_section(response.message.content, "exercise"),
                 "ayurveda_tip": extract_section(response.message.content, "Ayurveda")
             }
-            logger.info(f"[GenerateRecommendations] Extracted result: {result}")
             return result, 200
         except Exception as e:
             return {'error': str(e)}, 500
