@@ -934,20 +934,44 @@ class GenerateRecommendations(Resource):
                 f"Glucose: {vitals_data.get('blood_glucose', 'N/A')}, HR: {vitals_data.get('heart_rate', 'N/A')}"
             )
             response = chat(model=OLLAMA_MODEL_ID, messages=[{'role': 'user', 'content': prompt}])
+            logger.info(f"[GenerateRecommendations] Raw chat response: {response.message.content}")
             result = {
                 "self_care": extract_section(response.message.content, "self-care"),
                 "music": extract_section(response.message.content, "music"),
                 "exercise": extract_section(response.message.content, "exercise"),
                 "ayurveda_tip": extract_section(response.message.content, "Ayurveda")
             }
+            logger.info(f"[GenerateRecommendations] Extracted result: {result}")
             return result, 200
         except Exception as e:
             return {'error': str(e)}, 500
 
 def extract_section(text, section_name):
+    # Try to extract section by looking for the section name as a heading or in a line
+    import re
+    # Try heading style: e.g. 'Self-care:', 'Music:', etc.
+    pattern = re.compile(rf"{section_name}[:\-]?\s*(.*)", re.IGNORECASE)
     for line in text.splitlines():
+        match = pattern.match(line.strip())
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value
+    # Try to find a bullet list under the section
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
         if section_name.lower() in line.lower():
-            return line.split(":", 1)[-1].strip()
+            # Collect subsequent bullet points
+            bullets = []
+            for l in lines[i+1:]:
+                if l.strip().startswith('-') or l.strip().startswith('*'):
+                    bullets.append(l.strip('-* ').strip())
+                elif l.strip() == '' or l.strip().startswith('#'):
+                    continue
+                else:
+                    break
+            if bullets:
+                return '\n'.join(bullets)
     return "Not found"
     
 @ayurveda_ns.route('/remedy_recommendation')
