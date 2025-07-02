@@ -12,24 +12,18 @@ class SymptomClassifier:
         results = []
         for i, pred in enumerate(predictions):
             labels = self.label_binarizer.inverse_transform(pred.reshape(1, -1))[0]
-            # If model returns empty, try to match at least one symptom from user input to dataset
+            # If model returns empty, try to match all relevant labels from user input to dataset using substring/phrase matching
             if not labels:
-                # Get all possible labels from training data
-                all_labels = set()
-                for label_list in self.label_binarizer.classes_:
-                    all_labels.add(label_list)
-                # Try to match any symptom in user input to known labels
-                user_symptoms = set()
-                # If input was a joined string, split on common delimiters
-                input_text = texts[i]
-                # Try splitting by comma, then by space
-                if ',' in input_text:
-                    user_symptoms = set([s.strip().lower() for s in input_text.split(',')])
-                else:
-                    user_symptoms = set([s.strip().lower() for s in input_text.split()])
-                matched = [label for label in all_labels if label.lower() in user_symptoms]
+                all_labels = set(self.label_binarizer.classes_)
+                input_text = texts[i].lower()
+                matched = []
+                for label in all_labels:
+                    label_clean = label.lower().replace('_', ' ')
+                    # Match if label as phrase or as token is present in input
+                    if label_clean in input_text or label.lower() in input_text:
+                        matched.append(label)
                 if matched:
-                    labels = tuple(matched)
+                    labels = tuple(sorted(set(matched)))
             results.append(labels)
         return results
 
