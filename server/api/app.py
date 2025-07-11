@@ -821,30 +821,27 @@ class SymptomRiskMapping(Resource):
     def post(self):
         print("[SymptomRiskMapping] Endpoint hit", flush=True)
         logger.info("[SymptomRiskMapping] Endpoint hit")
-        '''Map symptoms to potential pregnancy risks using symptoms, vitals, and diagnosis'''
+
         try:
+        # Validate token
             claims, error = validate_token(request)
             if error:
                 return {'error': error}, 401
-            user_id = claims.get('sub') if claims else None
+            user_id = claims.get('sub')
             if not user_id:
                 return {'error': 'Token missing subject'}, 401
+
+        # Validate request body
             data = request.get_json()
             if not data or "symptom_categories" not in data:
                 return {'error': 'Missing symptom categories'}, 400
+
             if symptom_risk_model is None:
                 return {'error': 'Risk mapping service unavailable'}, 500
-            symptom_categories = data["symptom_categories"]
-            historical_data = supabase.table('symptoms')\
-                .select('classified_categories')\
-                .eq('UID', user_id)\
-                .order('recorded_at', desc=True)\
-                .limit(5)\
-                .execute()
-            all_symptoms = symptom_categories.copy()
-            for record in historical_data.data:
-                all_symptoms.extend(record['classified_categories'])
-            all_symptoms = list(dict.fromkeys(all_symptoms))
+
+            symptoms = list(dict.fromkeys(data["symptom_categories"]))  # Remove duplicates
+
+        # Get most recent vitals (optional fallback values)
             vitals_data = supabase.table("vitals")\
                 .select("systolic_bp, diastolic_bp, blood_glucose, body_temp, heart_rate")\
                 .eq("UID", user_id)\
@@ -852,48 +849,55 @@ class SymptomRiskMapping(Resource):
                 .limit(1)\
                 .execute()
             vitals = vitals_data.data[0] if vitals_data.data else {}
-            combined_features = {
-                "symptoms": all_symptoms,
-                "systolic_bp": vitals.get("systolic_bp", 120),
-                "diastolic_bp": vitals.get("diastolic_bp", 80),
-                "blood_glucose": vitals.get("blood_glucose", 90),
-                "body_temp": vitals.get("body_temp", 36.8),
-                "heart_rate": vitals.get("heart_rate", 78)
+
+        # Prepare input features
+            model_features = {
+            "symptoms": symptoms,
+            "systolic_bp": vitals.get("systolic_bp", 120),
+            "diastolic_bp": vitals.get("diastolic_bp", 80),
+            "blood_glucose": vitals.get("blood_glucose", 90),
+            "body_temp": vitals.get("body_temp", 36.8),
+            "heart_rate": vitals.get("heart_rate", 78)
             }
+
             try:
-                risks = symptom_risk_model.predict([combined_features])[0]
-                probs = symptom_risk_model.predict_proba([combined_features])[0]
-                risk_labels = symptom_risk_model.label_binarizer.classes_ if hasattr(symptom_risk_model, 'label_binarizer') else []
+                X = encode_features_for_model(model_features)
+                risks = symptom_risk_model.model.predict(X)[0]
+                probs = symptom_risk_model.model.predict_proba(X)[0]
+                risk_labels = symptom_risk_model.label_binarizer.classes_
+
                 risks_result = []
                 for idx, label in enumerate(risk_labels):
                     prob = float(probs[idx])
                     if label in risks:
                         risks_result.append({
-                            'risk_type': label,
-                            'probability': prob,
-                            'severity': 'high' if prob > 0.7 else 'medium' if prob > 0.4 else 'low'
+                        'risk_type': label,
+                        'probability': round(prob, 4),
+                        'severity': 'high' if prob > 0.7 else 'medium' if prob > 0.4 else 'low'
                         })
+
+            # Save the assessment
                 risk_data = {
-                    'UID': user_id,
-                    'symptoms': all_symptoms,
-                    'risks': risks_result,
-                    'assessed_at': datetime.utcnow().isoformat()
+                'UID': user_id,
+                'symptoms': symptoms,
+                'risks': risks_result,
+                'assessed_at': datetime.utcnow().isoformat()
                 }
                 try:
                     supabase.table('risk_assessments').insert(risk_data).execute()
                 except Exception as e:
                     logger.warning(f"Failed to store risk assessment: {str(e)}")
+
                 return {'risks': risks_result}, 200
+
             except Exception as e:
                 logger.warning(f"Risk prediction failed: {str(e)}")
-                # Fallback: just return the risks as a list if possible
-                try:
-                    risks = symptom_risk_model.predict([combined_features])[0]
-                    return {'risks': list(risks)}, 200
-                except Exception as e2:
-                    return {'error': f'Risk prediction failed: {str(e2)}'}, 500
+                return {'error': f'Risk prediction failed: {str(e)}'}, 500
+
         except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
             return {'error': f'Unexpected error: {str(e)}'}, 500
+
 
 @generate_recommendations.route('/')
 class GenerateRecommendations(Resource):
@@ -1102,21 +1106,16 @@ class RemedyRecommendation(Resource):
 
 
 def encode_features_for_model(features: dict):
-    # Merge all categorical & numeric features
-    merged_dict = {
-        "systolic_bp": features["systolic_bp"],
-        "diastolic_bp": features["diastolic_bp"],
-        "blood_glucose": features["blood_glucose"],
-        "body_temp": features["body_temp"],
-        "heart_rate": features["heart_rate"]
+    vector = {
+        "systolic_bp": features.get("systolic_bp", 120),
+        "diastolic_bp": features.get("diastolic_bp", 80),
+        "blood_glucose": features.get("blood_glucose", 90),
+        "body_temp": features.get("body_temp", 36.8),
+        "heart_rate": features.get("heart_rate", 78)
     }
-    # Add multi-hot encoded symptoms
-    for symptom in features["symptoms"]:
-        merged_dict[f"symptom__{symptom}"] = 1
-    # Add diagnosis keywords
-    for diag in features["diagnoses"]:
-        merged_dict[f"diagnosis__{diag.lower().replace(' ', '_')}"] = 1
-    return vectorizer.transform(merged_dict)  # vectorizer = DictVectorizer or similar
+    for symptom in features.get("symptoms", []):
+        vector[f"symptom__{symptom}"] = 1
+    return vectorizer.transform([vector])
 
 @api.route('/')
 class Index(Resource):
