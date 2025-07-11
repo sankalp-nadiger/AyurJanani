@@ -861,7 +861,7 @@ class SymptomRiskMapping(Resource):
             }
 
             try:
-                X = encode_features_for_model(model_features)
+                X = encode_features_for_model(model_features, symptom_risk_model)
                 risks = symptom_risk_model.model.predict(X)[0]
                 probs = symptom_risk_model.model.predict_proba(X)[0]
                 risk_labels = symptom_risk_model.label_binarizer.classes_
@@ -1105,7 +1105,7 @@ class RemedyRecommendation(Resource):
             return {'error': str(e)}, 500
 
 
-def encode_features_for_model(features: dict):
+def encode_features_for_model(features: dict, model_obj):
     vector = {
         "systolic_bp": features.get("systolic_bp", 120),
         "diastolic_bp": features.get("diastolic_bp", 80),
@@ -1115,7 +1115,7 @@ def encode_features_for_model(features: dict):
     }
     for symptom in features.get("symptoms", []):
         vector[f"symptom__{symptom}"] = 1
-    return vectorizer.transform([vector])
+    return model_obj.vectorizer.transform([vector])
 
 @api.route('/')
 class Index(Resource):
